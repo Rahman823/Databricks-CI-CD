@@ -1,0 +1,62 @@
+name: Run Databricks Notebook Test on PR
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+jobs:
+  run-databricks-notebook-test:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Install dependencies
+      run: |
+        pip install databricks-cli jq
+
+    - name: Configure Databricks CLI
+      env:
+        DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+        DATABRICKS_TOKEN: ${{ secrets.PAT }}
+      run: |
+        mkdir -p ~/.databricks
+        echo -e "[DEFAULT]\nhost = ${DATABRICKS_HOST}\ntoken = ${DATABRICKS_TOKEN}" > ~/.databricks/config
+
+    - name: Run notebook via Databricks CLI
+      run: |
+        echo "Submitting notebook job to Databricks..."
+
+        RESPONSE=$(databricks runs submit --json-file run-config.json)
+        echo "Databricks submit response:"
+        echo "$RESPONSE"
+
+        # Extract the run ID from the response
+        RUN_ID=$(echo "$RESPONSE" | jq -r '.run_id')
+
+        if [ "$RUN_ID" == "null" ] || [ -z "$RUN_ID" ]; then
+          echo "Failed to submit notebook job. Aborting."
+          exit 1
+        fi
+
+        echo "Run ID: $RUN_ID"
+        echo "Waiting for job to complete..."
+        databricks runs wait --run-id "$RUN_ID"
+
+        RESULT=$(databricks runs get --run-id "$RUN_ID" | jq -r '.state.result_state')
+        echo "Notebook run result: $RESULT"
+
+        if [ "$RESULT" != "SUCCESS" ]; then
+          echo "Notebook test failed. Failing the job."
+          exit 1
+        fi
